@@ -13,38 +13,20 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Disable IPv6 (Fixes Network Unreachable Errors)
-      run: |
-        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
-        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-
-    - name: Install System Dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y build-essential git zip unzip openjdk-11-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libltdl-dev libsqlite3-dev
-
-    - name: Install Buildozer & Cython
-      run: |
-        pip install --upgrade buildozer "cython<3.0" virtualenv
-
     - name: Prevent Out of Memory (OOM) Errors
       run: |
-        # GitHub runners only have 7GB RAM. Building two architectures concurrently
-        # causes it to crash. We dynamically edit the spec to build only arm64.
+        # Only build for arm64 to save RAM and cut build time in half
         sed -i 's/arm64-v8a, armeabi-v7a/arm64-v8a/' buildozer.spec
 
-    - name: Build APK with Buildozer (Auto-accept licenses)
-      run: |
-        set +o pipefail
-        yes | buildozer android debug
+    - name: Build with Official Buildozer Action
+      uses: ArtemSBulgakov/buildozer-action@v1
+      id: buildozer
+      with:
+        command: buildozer android debug
+        buildozer_version: master
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: FastTransfer-APK
-        path: bin/*.apk
+        path: ${{ steps.buildozer.outputs.filename }}
