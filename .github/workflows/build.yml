@@ -13,6 +13,11 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    - name: Disable IPv6 (Fixes URLError Network Unreachable)
+      run: |
+        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -21,14 +26,14 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt update
-        sudo apt install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+        sudo apt install -y git zip unzip openjdk-11-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
 
     - name: Install Buildozer & Cython
       run: |
         pip install --upgrade buildozer "cython<3.0" virtualenv
 
     - name: Build APK with Buildozer
-      run: yes | buildozer android debug
+      run: buildozer android debug
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
