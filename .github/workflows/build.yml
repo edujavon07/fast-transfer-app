@@ -25,13 +25,10 @@ jobs:
 
     - name: Install Buildozer & Cython
       run: |
-        pip install --upgrade buildozer cython virtualenv
-
-    - name: Accept Android SDK Licenses
-      run: yes | sdkmanager --licenses || true
+        pip install --upgrade buildozer "cython<3.0" virtualenv
 
     - name: Build APK with Buildozer
-      run: buildozer android debug
+      run: yes | buildozer android debug
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
