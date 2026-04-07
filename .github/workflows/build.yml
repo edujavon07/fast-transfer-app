@@ -1,9 +1,68 @@
-<<<<
-    - name: Build APK with Buildozer
-      run: buildozer android debug
-====
-    - name: Build APK with Buildozer
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows you to trigger the build manually
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Disable IPv6 (Fixes Network Unreachable Errors)
       run: |
+        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
+    # CRITICAL FIX: This forces GitHub to actually use Java 17 for Gradle
+    - name: Set up Java 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential git zip unzip python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libltdl-dev libsqlite3-dev
+
+    - name: Install Buildozer & Cython
+      run: |
+        pip install --upgrade buildozer "cython<3.0" virtualenv
+
+    - name: Prevent Out of Memory (OOM) Errors
+      run: |
+        # Only build for arm64 to save RAM and cut build time in half
+        sed -i 's/arm64-v8a, armeabi-v7a/arm64-v8a/' buildozer.spec
+
+    - name: Build APK with Buildozer (Auto-accept licenses)
+      run: |
+        # Prevent Gradle from running out of memory during the APK packaging phase
+        export GRADLE_OPTS="-Xmx2048m -Dorg.gradle.daemon=false"
+        
+        # Turn off strict error checking so the 'yes' pipe doesn't crash the build
+        set +e
         set +o pipefail
+        
+        # Run buildozer. PIPESTATUS[1] grabs the success/fail code ONLY from buildozer 
+        # and ignores the "Broken pipe" error from 'yes'
         yes | buildozer android debug
->>>>
+        BUILDOZER_EXIT_CODE=${PIPESTATUS[1]}
+        
+        # Exit with buildozer's true status
+        exit $BUILDOZER_EXIT_CODE
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FastTransfer-APK
+        path: bin/*.apk
