@@ -53,9 +53,13 @@ try:
             .btn-blue { background-color: #007AFF; color: white; }
             .btn-blue:disabled { background-color: #A1CFFF; cursor: not-allowed; }
             #statusMessage { margin-top: 15px; font-weight: 500; font-size: 14px; }
-            progress { width: 100%; height: 8px; border-radius: 4px; margin-top: 10px; display: none; }
+            
+            .progress-wrapper { display: none; margin-top: 15px; }
+            progress { width: 100%; height: 8px; border-radius: 4px; display: block; }
             progress::-webkit-progress-bar { background-color: #E5E5EA; border-radius: 4px; }
             progress::-webkit-progress-value { background-color: #34C759; border-radius: 4px; }
+            .progress-text { font-size: 16px; font-weight: bold; color: #007AFF; margin-top: 8px; }
+            
             .file-list { text-align: left; margin-top: 20px; }
             .file-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #E5E5EA; }
             .file-name { font-size: 15px; color: #1C1C1E; word-break: break-all; margin-right: 10px; }
@@ -71,8 +75,12 @@ try:
             <input type="file" id="filePicker" multiple>
             1. Choose Files
         </label>
-        <button class="btn btn-blue" id="sendBtn" onclick="uploadFiles()">2. Send Files</button>
-        <progress id="progressBar" value="0" max="100"></progress>
+        <button class="btn btn-blue" id="sendBtn" onclick="startUploadProcess()">2. Send Files</button>
+        
+        <div class="progress-wrapper" id="progressWrapper">
+            <progress id="progressBar" value="0" max="100"></progress>
+            <div class="progress-text" id="progressText">0.0%</div>
+        </div>
         <div id="statusMessage"></div>
     </div>
     <div class="container">
@@ -85,7 +93,9 @@ try:
         const filePicker = document.getElementById('filePicker');
         const sendBtn = document.getElementById('sendBtn');
         const status = document.getElementById('statusMessage');
-        const progress = document.getElementById('progressBar');
+        const progressWrapper = document.getElementById('progressWrapper');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
         const fileLabel = document.getElementById('fileLabel');
 
         filePicker.addEventListener('change', function() {
@@ -97,28 +107,114 @@ try:
             }
         });
 
-        async function uploadFiles() {
+        // Query the server to see if the file exists and how big it is
+        async function getFileStatus(filename) {
+            try {
+                const res = await fetch(`/status/${encodeURIComponent(filename)}`);
+                if (!res.ok) throw new Error("Status check failed");
+                const data = await res.json();
+                return data.size; // returns 0 if not found
+            } catch(e) {
+                return null; // Network offline
+            }
+        }
+
+        // XHR Promise wrapper to get live percentage updates
+        function uploadChunk(file, offset, filename, currentFileIndex, totalFiles) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const chunk = file.slice(offset);
+                
+                xhr.upload.addEventListener("progress", (event) => {
+                    if (event.lengthComputable) {
+                        const totalUploaded = offset + event.loaded;
+                        const percent = ((totalUploaded / file.size) * 100).toFixed(1);
+                        
+                        // Calculate overall progress across all files
+                        const overallPercent = ((currentFileIndex / totalFiles) * 100) + ((totalUploaded / file.size) * (100 / totalFiles));
+                        
+                        progressBar.value = overallPercent;
+                        progressText.innerText = `${percent}% (File ${currentFileIndex + 1} of ${totalFiles})`;
+                    }
+                });
+
+                xhr.addEventListener("load", () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve();
+                    } else {
+                        reject(`Server Error ${xhr.status}: ${xhr.responseText}`);
+                    }
+                });
+
+                xhr.addEventListener("error", () => reject("Network Connection Lost"));
+                xhr.addEventListener("abort", () => reject("Upload Aborted"));
+
+                xhr.open("POST", `/upload/${encodeURIComponent(filename)}`);
+                xhr.setRequestHeader("X-Resume-Offset", offset.toString());
+                xhr.send(chunk);
+            });
+        }
+
+        async function startUploadProcess() {
             const files = filePicker.files;
             if(files.length === 0) return status.innerText = "Please choose files first!";
+            
             sendBtn.disabled = true;
-            progress.style.display = "block";
+            progressWrapper.style.display = "block";
             status.style.color = "#1C1C1E";
             
-            for(let i = 0; i < files.length; i++) {
-                const file = files[i];
-                status.innerText = `Sending: ${file.name} (${i+1}/${files.length})`;
-                try {
-                    const response = await fetch(`/upload/${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
-                    if(!response.ok) throw new Error("Network error");
-                    progress.value = ((i + 1) / files.length) * 100;
-                } catch (err) {
-                    status.innerText = `Failed to send ${file.name}.`;
-                    status.style.color = "#FF3B30";
-                    sendBtn.disabled = false;
-                    return;
+            let currentFileIndex = 0;
+            
+            while(currentFileIndex < files.length) {
+                const file = files[currentFileIndex];
+                let isUploaded = false;
+                
+                // Infinite retry loop for the current file
+                while(!isUploaded) {
+                    try {
+                        const serverSize = await getFileStatus(file.name);
+                        
+                        if (serverSize === null) {
+                            status.innerText = `Network dropped! Retrying ${file.name} in 3 seconds...`;
+                            status.style.color = "#FF3B30";
+                            await new Promise(r => setTimeout(r, 3000));
+                            continue;
+                        }
+
+                        // File verification: Same size means it's already complete!
+                        if (serverSize === file.size) {
+                            status.innerText = `Skipping: ${file.name} (Already complete!)`;
+                            status.style.color = "#34C759";
+                            isUploaded = true;
+                            continue;
+                        }
+                        
+                        // Resume logic
+                        let offset = 0;
+                        if (serverSize > 0 && serverSize < file.size) {
+                            offset = serverSize;
+                            const offsetMB = (offset / (1024 * 1024)).toFixed(1);
+                            status.innerText = `Resuming: ${file.name} from cutoff point (${offsetMB} MB)...`;
+                            status.style.color = "#FF9500"; // Orange indicating resume
+                        } else {
+                            status.innerText = `Sending: ${file.name}`;
+                            status.style.color = "#1C1C1E";
+                        }
+
+                        // Wait for chunk to finish
+                        await uploadChunk(file, offset, file.name, currentFileIndex, files.length);
+                        isUploaded = true; // Mark as done to exit retry loop
+                        
+                    } catch(err) {
+                        status.innerText = `Transfer Failed (${err}). Auto-resuming in 3 seconds...`;
+                        status.style.color = "#FF3B30";
+                        await new Promise(r => setTimeout(r, 3000));
+                    }
                 }
+                currentFileIndex++;
             }
-            status.innerText = "✅ All files transferred!";
+            
+            status.innerText = "✅ All files transferred successfully!";
             status.style.color = "#34C759";
             sendBtn.disabled = false;
             fileLabel.innerHTML = `<input type="file" id="filePicker" multiple> 1. Choose Files`;
@@ -161,13 +257,27 @@ try:
     @app_fastapi.get("/", response_class=HTMLResponse)
     async def home_gui():
         return HTML_GUI
+        
+    @app_fastapi.get("/status/{filename}")
+    async def file_status(filename: str):
+        """Allows client to check file size before uploading to enable resuming."""
+        global DATA_DIR
+        file_path = os.path.join(DATA_DIR, filename)
+        if os.path.exists(file_path):
+            return {"size": os.path.getsize(file_path)}
+        return {"size": 0}
 
     @app_fastapi.post("/upload/{filename}")
     async def upload_file(filename: str, request: Request):
         global DATA_DIR
         file_path = os.path.join(DATA_DIR, filename)
+        
+        # Read the resume offset header. If > 0, we append to the file. Otherwise, overwrite.
+        offset = int(request.headers.get("X-Resume-Offset", 0))
+        mode = 'ab' if offset > 0 else 'wb'
+        
         try:
-            with open(file_path, 'wb') as f:
+            with open(file_path, mode) as f:
                 async for chunk in request.stream():
                     if chunk:
                         f.write(chunk)
