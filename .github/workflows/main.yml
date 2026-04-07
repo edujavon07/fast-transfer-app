@@ -13,20 +13,46 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    - name: Disable IPv6 (Fixes Network Unreachable Errors)
+      run: |
+        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential git zip unzip openjdk-11-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libltdl-dev libsqlite3-dev
+
+    - name: Install Buildozer & Cython
+      run: |
+        pip install --upgrade buildozer "cython<3.0" virtualenv
+
     - name: Prevent Out of Memory (OOM) Errors
       run: |
         # Only build for arm64 to save RAM and cut build time in half
         sed -i 's/arm64-v8a, armeabi-v7a/arm64-v8a/' buildozer.spec
 
-    - name: Build with Official Buildozer Action
-      uses: ArtemSBulgakov/buildozer-action@v1
-      id: buildozer
-      with:
-        command: buildozer android debug
-        buildozer_version: master
+    - name: Build APK with Buildozer (Auto-accept licenses)
+      run: |
+        # Turn off strict error checking so the 'yes' pipe doesn't crash the build
+        set +e
+        set +o pipefail
+        
+        # Run buildozer. PIPESTATUS[1] grabs the success/fail code ONLY from buildozer 
+        # and ignores the "Broken pipe" error from 'yes'
+        yes | buildozer android debug
+        BUILDOZER_EXIT_CODE=${PIPESTATUS[1]}
+        
+        # Exit with buildozer's true status
+        exit $BUILDOZER_EXIT_CODE
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: FastTransfer-APK
-        path: ${{ steps.buildozer.outputs.filename }}
+        path: bin/*.apk
