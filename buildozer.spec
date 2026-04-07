@@ -18,8 +18,10 @@ source.include_exts = py,png,jpg,kv,atlas,html
 version = 1.0
 
 # (list) Application requirements
-# Added h11, click, anyio, sniffio, and idna to guarantee NO hidden Uvicorn/FastAPI import crashes!
-requirements = python3,kivy,fastapi,uvicorn,aiofiles,python-multipart,typing-extensions,pydantic<2.0,starlette,h11,click,anyio,sniffio,idna
+# THE PROFESSIONAL FIX: Strict Version Pinning.
+# We lock FastAPI to 0.95.1 and Pydantic to 1.10.12. This stops 'pip' from downloading the newest 
+# incompatible versions that cause hidden import crashes on Android.
+requirements = python3,kivy,fastapi==0.95.1,pydantic==1.10.12,starlette==0.27.0,uvicorn==0.23.2,aiofiles,python-multipart,typing-extensions,h11,click,anyio,sniffio,idna
 
 # (list) Permissions
 android.permissions = INTERNET, ACCESS_WIFI_STATE, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
