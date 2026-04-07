@@ -26,7 +26,8 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt update
-        sudo apt install -y build-essential git zip unzip openjdk-11-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libltdl-dev libsqlite3-dev
+        # Upgraded to openjdk-17-jdk (Required for Gradle to build Android API 33)
+        sudo apt install -y build-essential git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev libltdl-dev libsqlite3-dev
 
     - name: Install Buildozer & Cython
       run: |
@@ -39,6 +40,9 @@ jobs:
 
     - name: Build APK with Buildozer (Auto-accept licenses)
       run: |
+        # Prevent Gradle from running out of memory during the APK packaging phase
+        export GRADLE_OPTS="-Xmx2048m -Dorg.gradle.daemon=false"
+        
         # Turn off strict error checking so the 'yes' pipe doesn't crash the build
         set +e
         set +o pipefail
