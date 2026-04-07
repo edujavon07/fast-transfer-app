@@ -10,15 +10,15 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.image import Image
+from kivy.uix.popup import Popup
+from kivy.uix.filechooser import FileChooserListView
 from kivy.core.window import Window
 from kivy.utils import platform
 
 # ==========================================
 # 1. FOOLPROOF ENVIRONMENT & IMPORTS
 # ==========================================
-# We wrap the heavy server libraries in a try/except.
-# If an import fails on Android, it won't crash the app. 
-# It will display the error on the screen so we can fix it!
 IMPORT_ERROR = None
 app_fastapi = None
 DATA_DIR = ""
@@ -28,6 +28,8 @@ try:
     from fastapi import FastAPI, Request
     from fastapi.responses import HTMLResponse, FileResponse
     import aiofiles
+    import pyqrcode
+    import png  # Requires the 'pypng' library
 
     # ==========================================
     # 2. FASTAPI SERVER LOGIC
@@ -75,7 +77,7 @@ try:
     </div>
     <div class="container">
         <h2>Receive from Android</h2>
-        <p>Files currently in Android's TransferData folder.</p>
+        <p>Files currently in Android's selected folder.</p>
         <button class="btn btn-gray" onclick="loadFiles()">↻ Refresh List</button>
         <div class="file-list" id="fileList"></div>
     </div>
@@ -195,7 +197,6 @@ try:
         return {"error": "File not found"}
 
 except Exception as e:
-    # If ANY import fails, save the exact error log
     IMPORT_ERROR = traceback.format_exc()
 
 
@@ -217,47 +218,93 @@ class TransferApp(App):
     def build(self):
         global DATA_DIR
         
-        # GUARANTEED WRITABLE DIRECTORY: 
-        # Bypasses the strict API 33 Storage crash by using the app's internal sandbox
+        # Default starting directory
         if platform == 'android':
             DATA_DIR = os.path.join(self.user_data_dir, "TransferData")
         else:
             DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "TransferData")
 
         self.server_thread = None
-        self.layout = BoxLayout(orientation='vertical', padding=30, spacing=20)
+        self.layout = BoxLayout(orientation='vertical', padding=20, spacing=15)
         
-        # IF IMPORTS FAILED: Display the crash log on the screen so we can fix it!
         if IMPORT_ERROR:
             scroll = ScrollView(size_hint=(1, 1))
             error_lbl = Label(
                 text=f"CRASH LOG (Missing Dependency):\n\n{IMPORT_ERROR}", 
-                font_size='14sp', 
-                color=(1, 0.2, 0.2, 1), 
-                size_hint_y=None,
-                halign="left",
-                valign="top"
+                font_size='14sp', color=(1, 0.2, 0.2, 1), size_hint_y=None, halign="left", valign="top"
             )
-            # Make the label dynamically wrap the text
             error_lbl.bind(width=lambda *x: error_lbl.setter('text_size')(error_lbl, (error_lbl.width, None)))
             error_lbl.bind(texture_size=error_lbl.setter('size'))
-            
             scroll.add_widget(error_lbl)
             self.layout.add_widget(scroll)
             return self.layout
 
-        # IF IMPORTS SUCCEEDED: Show the normal UI
-        self.title_label = Label(text="Fast Transfer", font_size='30sp', bold=True, size_hint=(1, 0.2))
+        self.title_label = Label(text="Fast Transfer", font_size='28sp', bold=True, size_hint=(1, 0.1))
         self.layout.add_widget(self.title_label)
         
-        self.info_label = Label(text="Press start to begin.", font_size='18sp', halign="center", size_hint=(1, 0.4))
+        self.info_label = Label(text="Connect your phone to the same Wi-Fi.", font_size='16sp', halign="center", size_hint=(1, 0.1))
         self.layout.add_widget(self.info_label)
-        
-        self.start_btn = Button(text="Start Server", font_size='24sp', size_hint=(1, 0.3), background_color=(0, 0.5, 1, 1))
+
+        # The QR Code Image (Empty on startup)
+        self.qr_image = Image(size_hint=(1, 0.45))
+        self.layout.add_widget(self.qr_image)
+
+        # Current Location Readout
+        self.loc_label = Label(text=f"Save Folder:\n{DATA_DIR}", font_size='13sp', halign="center", color=(0.7, 0.7, 0.7, 1), size_hint=(1, 0.15))
+        self.loc_label.bind(width=lambda *x: self.loc_label.setter('text_size')(self.loc_label, (self.loc_label.width, None)))
+        self.layout.add_widget(self.loc_label)
+
+        # Buttons layout
+        btn_layout = BoxLayout(orientation='horizontal', spacing=10, size_hint=(1, 0.2))
+
+        self.browse_btn = Button(text="Change Folder", background_color=(0.4, 0.4, 0.4, 1))
+        self.browse_btn.bind(on_press=self.show_file_browser)
+        btn_layout.add_widget(self.browse_btn)
+
+        self.start_btn = Button(text="Start Server", font_size='20sp', background_color=(0, 0.5, 1, 1))
         self.start_btn.bind(on_press=self.start_server)
-        self.layout.add_widget(self.start_btn)
+        btn_layout.add_widget(self.start_btn)
         
+        self.layout.add_widget(btn_layout)
         return self.layout
+
+    def show_file_browser(self, instance):
+        # Create a popup UI for picking folders
+        content = BoxLayout(orientation='vertical', spacing=10)
+        
+        # Try to open the public Downloads folder first, fallback to app sandbox
+        start_path = "/storage/emulated/0/Download" if os.path.exists("/storage/emulated/0/Download") else self.user_data_dir
+        
+        filechooser = FileChooserListView(path=start_path, dirselect=True)
+        content.add_widget(filechooser)
+        
+        btn_layout = BoxLayout(size_hint_y=None, height=60, spacing=10)
+        cancel_btn = Button(text="Cancel", background_color=(1, 0.3, 0.3, 1))
+        select_btn = Button(text="Select Folder", background_color=(0.3, 1, 0.3, 1))
+        
+        btn_layout.add_widget(cancel_btn)
+        btn_layout.add_widget(select_btn)
+        content.add_widget(btn_layout)
+        
+        popup = Popup(title="Choose Save Location", content=content, size_hint=(0.95, 0.95))
+        
+        def on_select(btn):
+            global DATA_DIR
+            # If they tapped a folder, select it. If they just navigated into a folder, select the current path.
+            selected = filechooser.selection[0] if filechooser.selection else filechooser.path
+            
+            # Verify Android allows writing to this folder
+            if os.access(selected, os.W_OK):
+                DATA_DIR = selected
+                self.loc_label.text = f"Save Folder:\n{DATA_DIR}"
+                popup.dismiss()
+            else:
+                self.info_label.text = "Error: Android blocked writing to that folder!"
+                popup.dismiss()
+
+        select_btn.bind(on_press=on_select)
+        cancel_btn.bind(on_press=popup.dismiss)
+        popup.open()
 
     def start_server(self, instance):
         try:
@@ -269,10 +316,26 @@ class TransferApp(App):
         if self.server_thread is None or not self.server_thread.is_alive():
             ip = get_local_ip()
             port = 8080
+            url = f"http://{ip}:{port}"
             
+            # Generate the QR Code PNG
+            try:
+                import pyqrcode
+                qr = pyqrcode.create(url)
+                qr_path = os.path.join(self.user_data_dir, "qr_code.png")
+                # scale=6 creates a clean, large enough image for the iPhone to scan easily
+                qr.png(qr_path, scale=6) 
+                
+                # Update UI Image
+                self.qr_image.source = qr_path
+                self.qr_image.reload()
+            except Exception as e:
+                self.info_label.text = f"QR Error: {str(e)}"
+
             self.start_btn.text = "Server is Running"
             self.start_btn.disabled = True
-            self.info_label.text = f"Connect your iPhone to the same Wi-Fi.\n\nOpen Safari and type:\n\nhttp://{ip}:{port}"
+            self.browse_btn.disabled = True # Disable changing folders while active
+            self.info_label.text = f"Scan QR code above!"
             
             self.server_thread = threading.Thread(target=self.run_uvicorn, args=(port,), daemon=True)
             self.server_thread.start()
